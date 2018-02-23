@@ -108,3 +108,8 @@ Appears that ROM BIOS is probing for/initializing hardware.
 			* Register esi at `0x00007cf0` is set to `69632`, could mean ~64KB of RAM?
 			* I think esi is the value of `end_pa` which handles the loop
 
+## Loading the kernel
+
+* Changing the link address to `0x7C10` from `0x7C00` causes a "Triple fault" in qemu
+	* This is because the boot sector is no longer being loaded from the correct address
+
