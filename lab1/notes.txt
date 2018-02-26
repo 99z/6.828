@@ -113,3 +113,71 @@ Appears that ROM BIOS is probing for/initializing hardware.
 * Changing the link address to `0x7C10` from `0x7C00` causes a "Triple fault" in qemu
 	* This is because the boot sector is no longer being loaded from the correct address
 
+### Question
+
+* Reset the machine (exit QEMU/GDB and start them again). Examine the 8 words of memory at 0x00100000 at the point the BIOS enters the boot loader, and then again at the point the boot loader enters the kernel. Why are they different? What is there at the second breakpoint? (You do not really need to use QEMU to answer this question. Just think.)
+	* The values are different because the kernel is loaded into memory at the point just before loading the kernel, whereas at the beginning of the bootloader it is not
+
+## The kernel
+
+### Questions
+
+* What is the first instruction after the new mapping is established that would fail to work properly if the mapping weren't in place? Comment out the movl %eax, %cr0 in kern/entry.S, trace into it, and see if you were right.
+	* The instruction that crashes the kernel is `movl    $(bootstacktop),%esp`
+	* Removing this doesn't enable paging, so we can't set the stack pointer (esp) to VMA `0xf0110000` 
+* Explain the interface between printf.c and console.c. Specifically, what function does console.c export? How is this function used by printf.c?
+	* `console.c` exports the function `cprintf()`
+	* `printf.c` uses the function to print text with escape characters, specifically `\n`.
+* Explain the following from console.c:
+1      if (crt_pos >= CRT_SIZE) {
+2              int i;
+3              memmove(crt_buf, crt_buf + CRT_COLS, (CRT_SIZE - CRT_COLS) * sizeof(uint16_t));
+4              for (i = CRT_SIZE - CRT_COLS; i < CRT_SIZE; i++)
+5                      crt_buf[i] = 0x0700 | ' ';
+6              crt_pos -= CRT_COLS;
+7      }
+	* I believe this will reposition the cursor if it is calculated to be off-screen, though I'm not sure how that would happen
+		* If we are more than 80 cols, this should reposition the cursor on a newline
+* Trace the execution of the following code step-by-step:
+int x = 1, y = 3, z = 4;
+cprintf("x %d, y %x, z %d\n", x, y, z);
+	* In the call to cprintf(), to what does fmt point? To what does ap point?
+		* `fmt` points to `"x %d, y %x, z %d\n"`, which is the format string
+		* `ap` points to `va_list`, which looks like the arguments passed (variable list?)
+	* List (in order of execution) each call to cons_putc, va_arg, and vcprintf. For cons_putc, list its argument as well. For va_arg, list what ap points to before and after the call. For vcprintf list the values of its two arguments.
+		* `vcprintf (fmt=0xf0101872 "x %d, y %x, z %d\n", ap=0xf010ffd4 "\001")`
+		* `cons_putc (c=-267380620)` -> x
+		* `cons_putc (c=-267384627)` -> [space]
+		* `va_arg` -> `ap` points to 0x1
+		* `cons_putc (c=-267380617)` -> 1
+		* `cons_putc (c=-267380616)` -> ,
+		* `cons_putc (c=-267380615)` -> [space]
+		* `cons_putc (c=-267380614)` -> y
+		* `cons_putc (c=-267384627)` -> [space]
+		* `va_arg` -> `ap` points to 0x3
+		* `cons_putc (c=-267380611)` -> 3
+		* `cons_putc (c=-267380610)` -> ,
+		* `cons_putc (c=-267380609)` -> [space]
+		* `cons_putc (c=-267380608)` -> z
+		* `cons_putc (c=-267384627)` -> [space]
+		* `va_arg` -> `ap` points to 0x4
+		* `cons_putc (c=-267380605)` -> 4
+		* `cons_putc (c=-267380703)` -> \n
+	* Run the following code.
+		```
+		unsigned int i = 0x00646c72;
+		cprintf("H%x Wo%s", 57616, &i);
+		```
+	  What is the output? Explain how this output is arrived at in the step-by-step manner of the previous exercise. Here's an ASCII table that maps bytes to characters.
+		* The output is `He110 World`
+		* `57616` in hex is `e110`. Because `%x` was passed, this decimal value gets formatted as hex.
+		* `0x72 = r, 0x6c = l, 0x64 = d, 0x00 = \0`. `vcprintf` is called with `&i = 0x00646c72`
+			* `vprintfmt` is then called. which casts the argument `&i` as an unsigned `char *`, resulting in `rld\0`
+	  The output depends on that fact that the x86 is little-endian. If the x86 were instead big-endian what would you set i to in order to yield the same output? Would you need to change 57616 to a different value?
+			* The reverse of `0x00646c72`: `0x726c6400`
+	* In the following code, what is going to be printed after 'y='? (note: the answer is not a specific value.) Why does this happen?
+		`cprintf("x=%d y=%d", 3);`
+		* Since no argument was supplied to the second `%d`, whatever value is on the stack will be printed.
+	* Let's say that GCC changed its calling convention so that it pushed arguments on the stack in declaration order, so that the last argument is pushed last. How would you have to change cprintf or its interface so that it would still be possible to pass it a variable number of arguments?
+		* `va_start`'s `ap` would need to be the last argument, `va_end`'s `ap` would need to be the first, and `va_arg` would need to be decremented
+
