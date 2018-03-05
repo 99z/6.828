@@ -166,10 +166,10 @@ mem_init(void)
 	page_init();
 
 	check_page_free_list(1);
-	cprintf("Entering check_page_alloc\n");
 	check_page_alloc();
-	cprintf("Exited check_page_alloc\n");
+	cprintf("Entering check_page\n");
 	check_page();
+	cprintf("Exited check_page\n");
 
 	//////////////////////////////////////////////////////////////////////
 	// Now we set up virtual memory
@@ -370,8 +370,33 @@ page_decref(struct PageInfo* pp)
 pte_t *
 pgdir_walk(pde_t *pgdir, const void *va, int create)
 {
-	// Fill this function in
-	return NULL;
+	struct PageInfo *new_page = NULL;
+
+	// PDX(va) is the page directory index
+	// Page directory entry is the address of that index in the dir
+	pde_t *pde = &pgdir[PDX(va)];
+
+	// PTE_P = page table entry present flag
+	// if 0, then we know it is not a valid address for translation
+	if (!(*pde & PTE_P) && (create == false)) {
+		return NULL;
+	}
+
+	new_page = page_alloc(1);
+
+	if (new_page == NULL) {
+		return NULL;
+	}
+
+	new_page->pp_ref++;
+	// Get physical address to new page
+	*pde = page2pa(new_page);
+	// Get virtual address of physical address pde,
+	// which is the new page
+	pte_t *base_pte = KADDR(PTE_ADDR(*pde));
+	// PTX(va) is page table index at virtual address
+	// Return base table entry at table index of virtual address
+	return &base_pte[PTX(va)];
 }
 
 //
@@ -388,7 +413,22 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 static void
 boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm)
 {
-	// Fill this function in
+	uint64_t va_end = va + size;
+
+	while (va != va_end) {
+		// Get PTE for current virtual address
+		pte_t *pte = pgdir_walk(pgdir, (void *) va, true);
+		// Set pointer to the physical address
+		// Bitwise OR the permission bits
+		*pte = pa | perm | PTE_P;
+		// Set value at pgdir index of va to itself
+		// ORed with the permission bits
+		pgdir[PDX(va)] = pgdir[PDX(va)] | (perm | PTE_P);
+
+		// Increment va and pa by a single page
+		va += PGSIZE;
+		pa += PGSIZE;
+	}
 }
 
 //
@@ -419,7 +459,25 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 int
 page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 {
-	// Fill this function in
+	pte_t *pte = pgdir_walk(pgdir, va, true);
+
+	if (pte == NULL) {
+		// Page table couldn't be allocated
+		return -E_NO_MEM;
+	}
+
+	// If prsent bit exists, then a page is already
+	// mapped at va
+	if (*pte & PTE_P) {
+		page_remove(pgdir, va);
+		tlb_invalidate(pgdir, va);
+	}
+
+	pp->pp_ref++;
+
+	*pte = page2pa(pp) | perm | PTE_P;
+
+	pgdir[PDX(va)] |= perm;
 	return 0;
 }
 
@@ -437,8 +495,24 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 struct PageInfo *
 page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 {
-	// Fill this function in
-	return NULL;
+	pte_t *pte = pgdir_walk(pgdir, va, false);
+
+	if (pte == NULL) {
+		// pgdir_walk failed, there is no page
+		// mapped at va
+		return NULL;
+	}
+
+	// Store pte_store in addr of pte for this page
+	// if it is not null
+	if (pte_store != 0) {
+		*pte_store = pte;
+	}
+
+	// Get physical address corresponding to page table entry
+	physaddr_t pa = PTE_ADDR(*pte);
+	// Return page corresponding to physical address
+	return pa2page(pa);
 }
 
 //
@@ -459,7 +533,17 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 void
 page_remove(pde_t *pgdir, void *va)
 {
-	// Fill this function in
+	pte_t *pte;
+	struct PageInfo *page = page_lookup(pgdir, va, &pte);
+
+	if (page == NULL) {
+		return;
+	}
+
+	page_decref(page);
+	tlb_invalidate(pgdir, va);
+	// Set present bit to 0
+	*pte = *pte & 0;
 }
 
 //

@@ -1,0 +1,38 @@
+# Virtual memory
+
+           Selector  +--------------+         +-----------+
+          ---------->|              |         |           |
+                     | Segmentation |         |  Paging   |
+Software             |              |-------->|           |---------->  RAM
+            Offset   |  Mechanism   |         | Mechanism |
+          ---------->|              |         |           |
+                     +--------------+         +-----------+
+            Virtual                   Linear                Physical
+
+* Selector + offset comprise virtual address
+	* Offset is a C pointer
+* Segmentation mechanism translates virtual to linear
+* Paging mechanism translates linear to physical
+* Since code executing on CPU is running in protected mode, all memory references are interpreted as virtual
+	* Subsequently, all C pointers refer to virtual addresses
+* `uintptr_t` are virtual addresses, `physaddr_t` are physical
+	* Both are just `uint32_t` types
+
+## Question
+
+1. Assuming that the following JOS kernel code is correct, what type should variable x have, uintptr_t or physaddr_t?
+	```
+	mystery_t x;
+	char* value = return_a_pointer();
+	*value = 10;
+	x = (mystery_t) value;
+	```
+
+	* `uintptr_t`
+* `KADDR(pa)` will add `0xf0000000` to a physical address to find the corresponding virtual address
+	* Finds virtual based on physical
+* Conversely, `PADDR(va)` subtracts `0xf0000000` to get the physical address
+* `pp_ref` is count of references to a physical page
+	* If this count is zero, we know we can free the page
+	* "Be careful when using page_alloc. The page it returns will always have a reference count of 0, so pp_ref should be incremented as soon as you've done something with the returned page (like inserting it into a page table)."
+
