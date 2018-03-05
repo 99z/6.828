@@ -100,10 +100,15 @@ boot_alloc(uint32_t n)
 	// Allocate a chunk large enough to hold 'n' bytes, then update
 	// nextfree.  Make sure nextfree is kept aligned
 	// to a multiple of PGSIZE.
-	//
-	// LAB 2: Your code here.
 
-	return NULL;
+	// If n > 0, allocate pages for result
+	if (n > 0) {
+		result = KADDR(PADDR(nextfree));
+	} else {
+		result = nextfree + ROUNDUP(n, PGSIZE);
+	}
+
+	return result;
 }
 
 // Set up a two-level page table:
@@ -125,7 +130,7 @@ mem_init(void)
 	i386_detect_memory();
 
 	// Remove this line when you're ready to test this function.
-	panic("mem_init: This function is not finished\n");
+	// panic("mem_init: This function is not finished\n");
 
 	//////////////////////////////////////////////////////////////////////
 	// create initial page directory.
@@ -147,8 +152,10 @@ mem_init(void)
 	// each physical page, there is a corresponding struct PageInfo in this
 	// array.  'npages' is the number of physical pages in memory.  Use memset
 	// to initialize all fields of each struct PageInfo to 0.
-	// Your code goes here:
 
+	// pages = number of elements (npages) * size of the struct we want
+	pages = (struct PageInfo *) boot_alloc(npages * sizeof(struct PageInfo));
+	memset(pages, 0, npages * sizeof(struct PageInfo));
 
 	//////////////////////////////////////////////////////////////////////
 	// Now that we've allocated the initial kernel data structures, we set
@@ -159,7 +166,9 @@ mem_init(void)
 	page_init();
 
 	check_page_free_list(1);
+	cprintf("Entering check_page_alloc\n");
 	check_page_alloc();
+	cprintf("Exited check_page_alloc\n");
 	check_page();
 
 	//////////////////////////////////////////////////////////////////////
@@ -252,9 +261,26 @@ page_init(void)
 	// NB: DO NOT actually touch the physical memory corresponding to
 	// free pages!
 	size_t i;
-	for (i = 0; i < npages; i++) {
+	// uintptr_t of page number field of address
+	size_t pagenum = PGNUM(PADDR(boot_alloc(0)));
+	// from pmap.h
+	// EXTPHYSMEM - IOPHYSMEM = 394K, the hole for I/O
+	// PGSIZE is 4096, so this returns 96
+	size_t io_hole_pages = (EXTPHYSMEM - IOPHYSMEM) / PGSIZE;
+	// mark physical page 0 as in use
+	pages[0].pp_ref = 1;
+	for (i = 1; i < npages; i++) {
+		// npages_basemem = amount of base memory in pages
+		// don't allocate memory in the io hole
+		if ((i >= npages_basemem && i < npages_basemem + io_hole_pages) ||
+		    // don't allocate memory used by the kernel
+		    (i >= npages_basemem + io_hole_pages && i < npages_basemem + io_hole_pages + pagenum)) {
+			pages[i].pp_ref = 1;
+			continue;
+		}
 		pages[i].pp_ref = 0;
 		pages[i].pp_link = page_free_list;
+		// page_free_list = PageInfo *
 		page_free_list = &pages[i];
 	}
 }
@@ -274,8 +300,21 @@ page_init(void)
 struct PageInfo *
 page_alloc(int alloc_flags)
 {
-	// Fill this function in
-	return 0;
+	if (page_free_list == NULL) {
+		return NULL;
+	}
+
+	struct PageInfo *pp = page_free_list;
+	page_free_list = pp->pp_link;
+	pp->pp_link = NULL;
+
+	// bitwise AND, not &&
+	if (alloc_flags & ALLOC_ZERO) {
+		cprintf("alloc_flags is zero\n");
+		// fill physical page with '\0' bytes
+		memset(page2kva(pp), '\0', PGSIZE);
+	}
+	return pp;
 }
 
 //
@@ -288,6 +327,11 @@ page_free(struct PageInfo *pp)
 	// Fill this function in
 	// Hint: You may want to panic if pp->pp_ref is nonzero or
 	// pp->pp_link is not NULL.
+	if ((pp->pp_ref != 0) || (pp->pp_link != NULL)) {
+		panic("pp->pp_ref is nonzero or pp->pp_link is not NULL!\n");
+	}
+	pp->pp_link = page_free_list;
+	page_free_list = pp;
 }
 
 //
